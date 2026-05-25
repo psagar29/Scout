@@ -11,7 +11,7 @@
 
 **Enter a business name. Get a broker-ready research packet with risk signals, coverage recommendations, and call prep — in seconds.**
 
-[Try the demo](#quick-start) · [Architecture](#architecture) · [How it works](#how-it-works)
+**[Live Demo](https://broker-scout.vercel.app)** · [Architecture](#architecture) · [How it works](#how-it-works)
 
 </div>
 
