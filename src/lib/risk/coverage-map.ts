@@ -224,6 +224,19 @@ export function buildCoverageRecommendations(
     });
 }
 
+function openerCategories(categories: string[]): string {
+  // Filter out location-only or generic meta keywords
+  const noise = new Set([
+    "east bay", "richmond ca", "san francisco", "los angeles", "new york",
+    "entrepreneurship", "community", "local", "professional", "small business",
+  ]);
+  const meaningful = categories
+    .filter((cat) => !noise.has(cat.toLowerCase()) && cat.length < 30)
+    .slice(0, 3);
+  if (meaningful.length === 0) return "commercial business";
+  return meaningful.join(", ");
+}
+
 export function buildBrokerCallPacket(input: {
   snapshot: BusinessSnapshot;
   signals: RiskSignal[];
@@ -245,7 +258,7 @@ export function buildBrokerCallPacket(input: {
   ];
 
   return {
-    opener: `${input.snapshot.name} looks like a ${input.snapshot.categories.join(", ") || "commercial business"} account. I pulled public sources before the call and want to confirm a few operating details so we can shape the right coverage stack.`,
+    opener: `${input.snapshot.name} looks like a ${openerCategories(input.snapshot.categories)} account. I pulled public sources before the call and want to confirm a few operating details so we can shape the right coverage stack.`,
     questions: [...(questionCandidates.length > 0 ? questionCandidates : fallbackQuestions)].slice(0, 8),
     likelyObjections: [
       {

@@ -124,6 +124,24 @@ function inferCategoriesFromText(value: string) {
   if (/(contractor|installation|repair|onsite service)/u.test(text)) {
     categories.add("contractor");
   }
+  if (/(coworking|workspace|incubator|shared office|meeting room)/u.test(text)) {
+    categories.add("coworking");
+  }
+  if (/(salon|spa|beauty|barbershop|wellness)/u.test(text)) {
+    categories.add("personal services");
+  }
+  if (/(retail|store|shop|boutique|showroom)/u.test(text)) {
+    categories.add("retail");
+  }
+  if (/(gym|fitness|yoga|crossfit|training)/u.test(text)) {
+    categories.add("fitness");
+  }
+  if (/(clinic|medical|dental|chiropractic|therapy)/u.test(text)) {
+    categories.add("healthcare");
+  }
+  if (/(auto repair|mechanic|body shop|car wash|detailing)/u.test(text)) {
+    categories.add("automotive");
+  }
   return [...categories];
 }
 

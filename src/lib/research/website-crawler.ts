@@ -54,6 +54,31 @@ function summarizeText(value: string, maxLength = 320) {
   return `${normalized.slice(0, maxLength).replace(/\s+\S*$/u, "")}...`;
 }
 
+function extractMetaFacts($: cheerio.CheerioAPI) {
+  const meta: Record<string, string> = {};
+  const selectors: Array<[string, string]> = [
+    ['meta[name="description"]', "content"],
+    ['meta[property="og:description"]', "content"],
+    ['meta[property="og:title"]', "content"],
+    ['meta[name="keywords"]', "content"],
+    ['meta[property="og:site_name"]', "content"],
+    ['meta[name="author"]', "content"],
+  ];
+  for (const [selector, attr] of selectors) {
+    const value = $(selector).attr(attr)?.trim();
+    if (value) {
+      const key = selector.replace(/^meta\[(?:name|property)="([^"]+)"\]$/u, "$1");
+      meta[key] = value;
+    }
+  }
+  return meta;
+}
+
+function isSpaShell($: cheerio.CheerioAPI) {
+  const bodyText = normalizeWhitespace($("body").text());
+  return bodyText.length < 50;
+}
+
 function extractJsonLdFacts($: cheerio.CheerioAPI) {
   const scripts = $('script[type="application/ld+json"]')
     .map((_, node) => $(node).text())
@@ -171,23 +196,54 @@ async function fetchHtml(url: string) {
 
 function extractPageData(url: string, html: string) {
   const $ = cheerio.load(html);
+  const meta = extractMetaFacts($);
+  const spa = isSpaShell($);
+
   $("script, style, noscript, svg").remove();
   const title =
     normalizeWhitespace($("title").first().text()) ||
+    meta["og:title"] ||
     normalizeWhitespace($("h1").first().text()) ||
     new URL(url).hostname;
   const bodyText = normalizeWhitespace($("body").text());
-  const pageText = summarizeText(bodyText, 480);
+
+  // For SPA shells, build text from meta tags instead of empty body.
+  // Deduplicate — description and og:description are often identical.
+  const metaParts: string[] = [];
+  if (meta["description"]) metaParts.push(meta["description"]);
+  if (meta["og:description"] && meta["og:description"] !== meta["description"]) {
+    metaParts.push(meta["og:description"]);
+  }
+  if (meta["keywords"]) metaParts.push(meta["keywords"]);
+  const metaText = metaParts.join(". ");
+
+  const effectiveText = spa && metaText.length > 0 ? metaText : bodyText;
+  const pageText = summarizeText(effectiveText, 480);
   const facts = extractJsonLdFacts($);
+
+  // Extract categories from meta keywords for SPAs
+  const metaCategories = [...facts.categories];
+  if (meta["keywords"]) {
+    for (const keyword of meta["keywords"].split(",")) {
+      const trimmed = keyword.trim().toLowerCase();
+      if (trimmed.length > 0 && trimmed.length < 40) {
+        metaCategories.push(trimmed);
+      }
+    }
+  }
+
+  const nameFromMeta =
+    facts.name ?? meta["og:site_name"] ?? meta["author"] ?? null;
 
   return {
     $,
     title,
     pageText,
-    phone: facts.phone ?? bodyText.match(PHONE_PATTERN)?.[0] ?? null,
-    address: facts.address ?? bodyText.match(ADDRESS_PATTERN)?.[0] ?? null,
-    name: facts.name,
-    categories: facts.categories,
+    spa,
+    phone: facts.phone ?? effectiveText.match(PHONE_PATTERN)?.[0] ?? null,
+    address: facts.address ?? effectiveText.match(ADDRESS_PATTERN)?.[0] ?? null,
+    name: nameFromMeta,
+    categories: metaCategories,
   };
 }
 
@@ -198,11 +254,6 @@ export async function crawlWebsite(rawUrl: string): Promise<CrawledWebsite | nul
   try {
     const homeHtml = await fetchHtml(baseUrl.toString());
     const homeData = extractPageData(baseUrl.toString(), homeHtml);
-    const candidateLinks = collectCandidateLinks(
-      homeData.$,
-      baseUrl,
-      baseUrl.toString(),
-    );
 
     const pages: CrawledWebsite["pages"] = [];
     const evidence: EvidenceItem[] = [];
@@ -212,31 +263,64 @@ export async function crawlWebsite(rawUrl: string): Promise<CrawledWebsite | nul
     let phone = homeData.phone;
     let combinedText = "";
 
-    for (const link of candidateLinks) {
-      try {
-        const html = link === baseUrl.toString() ? homeHtml : await fetchHtml(link);
-        const data = link === baseUrl.toString() ? homeData : extractPageData(link, html);
-        pages.push({
-          url: link,
-          title: data.title,
-          snippet: data.pageText,
-        });
-        evidence.push(
-          createEvidenceItem({
-            sourceType: "website",
-            title: data.title,
+    // Add the home page data
+    if (homeData.pageText) {
+      pages.push({
+        url: baseUrl.toString(),
+        title: homeData.title,
+        snippet: homeData.pageText,
+      });
+      evidence.push(
+        createEvidenceItem({
+          sourceType: "website",
+          title: homeData.spa
+            ? `${homeData.title} (meta tags)`
+            : homeData.title,
+          url: baseUrl.toString(),
+          snippet: homeData.pageText || `Fetched ${baseUrl.toString()}`,
+          confidence: homeData.spa ? "medium" : "high",
+        }),
+      );
+      combinedText += ` ${homeData.title} ${homeData.pageText}`;
+    }
+
+    // For SPAs, subpages return the same empty shell — skip crawling them.
+    // For static sites, crawl candidate links for richer evidence.
+    if (!homeData.spa) {
+      const candidateLinks = collectCandidateLinks(
+        homeData.$,
+        baseUrl,
+        baseUrl.toString(),
+      );
+
+      for (const link of candidateLinks) {
+        if (link === baseUrl.toString()) continue; // already processed
+        try {
+          const html = await fetchHtml(link);
+          const data = extractPageData(link, html);
+          if (data.spa) continue; // subpage is also a SPA shell
+          pages.push({
             url: link,
-            snippet: data.pageText || `Fetched ${link}`,
-            confidence: link === baseUrl.toString() ? "high" : "medium",
-          }),
-        );
-        combinedText += ` ${data.title} ${data.pageText}`;
-        if (!extractedName && data.name) extractedName = data.name;
-        if (!address && data.address) address = data.address;
-        if (!phone && data.phone) phone = data.phone;
-        for (const category of data.categories) categories.add(category);
-      } catch {
-        continue;
+            title: data.title,
+            snippet: data.pageText,
+          });
+          evidence.push(
+            createEvidenceItem({
+              sourceType: "website",
+              title: data.title,
+              url: link,
+              snippet: data.pageText || `Fetched ${link}`,
+              confidence: "medium",
+            }),
+          );
+          combinedText += ` ${data.title} ${data.pageText}`;
+          if (!extractedName && data.name) extractedName = data.name;
+          if (!address && data.address) address = data.address;
+          if (!phone && data.phone) phone = data.phone;
+          for (const category of data.categories) categories.add(category);
+        } catch {
+          continue;
+        }
       }
     }
 
