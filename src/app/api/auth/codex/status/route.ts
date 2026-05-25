@@ -8,11 +8,11 @@ import {
   codexSessionCookieHeaders,
   cleanupCodexAuthStores,
   resolveCodexSession,
-} from "@/lib/codex-oauth";
+} from "@/lib/auth/codex-oauth";
 import {
-  matrixGenerationStatusFor,
+  researchGenerationStatusFor,
   requestAppOrigin,
-} from "@/lib/generation-provider";
+} from "@/lib/ai/generation-provider";
 
 export const runtime = "nodejs";
 
@@ -26,7 +26,7 @@ export async function GET(request: NextRequest) {
     problem,
     message: codexOAuthProblemMessage(problem),
   };
-  const generation = matrixGenerationStatusFor(
+  const generation = researchGenerationStatusFor(
     appOrigin,
     configuration.signInAvailable,
   );
@@ -55,7 +55,7 @@ export async function GET(request: NextRequest) {
     configuration,
     generation,
   });
-  for (const cookie of codexSessionCookieHeaders(session)) {
+  for (const cookie of await codexSessionCookieHeaders(session)) {
     response.headers.append("Set-Cookie", cookie);
   }
 

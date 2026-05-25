@@ -5,7 +5,7 @@ import { headers } from "next/headers";
 import {
   codexOAuthConfigurationProblem,
   codexOAuthProblemMessage,
-} from "@/lib/codex-oauth";
+} from "@/lib/auth/codex-oauth";
 
 import { SignInStatus } from "./sign-in-status";
 
@@ -32,8 +32,8 @@ function firstValue(value: string | string[] | undefined) {
 
 const steps = [
   { icon: KeyRound, label: "Authenticate", desc: "Sign in with your ChatGPT or Codex account" },
-  { icon: Shield, label: "Authorize", desc: "Grant Clearweight access to generate matrices" },
-  { icon: Zap, label: "Generate", desc: "Start creating AI-powered decision matrices" },
+  { icon: Shield, label: "Authorize", desc: "Grant Scout access to run research jobs" },
+  { icon: Zap, label: "Research", desc: "Generate a sourced broker prep packet" },
 ];
 
 async function requestOrigin() {
@@ -62,7 +62,7 @@ export default async function SignInPage({ searchParams }: SignInPageProps) {
         <Link
           href="/"
           className="anim-fade inline-flex items-center gap-2 rounded-[10px] px-3 py-1.5 text-[12px] font-medium transition-all duration-200 hover:scale-[1.02] active:scale-[0.98]"
-          style={{ background: "var(--surface)", border: "1px solid var(--border-mid)", color: "var(--muted)" }}
+          style={{ background: "var(--btn-secondary-bg)", border: "1px solid var(--btn-secondary-border)", color: "var(--muted)" }}
         >
           <ArrowLeft size={13} />
           Back
@@ -79,10 +79,10 @@ export default async function SignInPage({ searchParams }: SignInPageProps) {
           </div>
 
           <h1 className="text-xl font-semibold" style={{ color: "var(--fg)" }}>
-            Sign in to Clearweight
+            Sign in to Scout
           </h1>
           <p className="mt-1.5 text-[13px] leading-relaxed" style={{ color: "var(--muted)" }}>
-            Connect your Codex account to unlock AI-powered decision matrix generation.
+            Connect your Codex account to run autonomous research locally.
           </p>
 
           {/* success banner */}
@@ -92,7 +92,7 @@ export default async function SignInPage({ searchParams }: SignInPageProps) {
               style={{ background: "rgba(52, 211, 153, 0.06)", border: "1px solid rgba(52, 211, 153, 0.12)", color: "rgb(110, 231, 183)" }}
             >
               <CheckCircle2 size={15} />
-              Connected successfully. You can now generate matrices.
+              Connected successfully. You can now run research.
             </div>
           )}
 
@@ -117,31 +117,20 @@ export default async function SignInPage({ searchParams }: SignInPageProps) {
 
           {/* CTA button */}
           {signInAvailable ? (
-            <a
-              href="/api/auth/codex/start?returnTo=/"
-              className="mt-6 flex h-11 w-full items-center justify-center gap-2.5 rounded-[12px] text-[13px] font-semibold transition-all duration-200 hover:scale-[1.01] hover:brightness-110 active:scale-[0.99]"
-              style={{ background: "var(--accent)", color: "var(--bg)", boxShadow: "var(--shadow-sm)" }}
-            >
+            <a href="/api/auth/codex/start?returnTo=/" className="btn-primary mt-6 w-full">
               <KeyRound size={15} />
               Continue with Codex
             </a>
           ) : (
-            <button
-              type="button"
-              disabled
-              className="mt-6 flex h-11 w-full cursor-not-allowed items-center justify-center gap-2.5 rounded-[12px] text-[13px] font-semibold opacity-60"
-              style={{ background: "var(--surface-hover)", color: "var(--muted)" }}
-            >
+            <button type="button" disabled className="btn-primary mt-6 w-full !opacity-40 !cursor-not-allowed">
               <KeyRound size={15} />
               Codex sign-in unavailable
             </button>
           )}
 
           {/* divider */}
-          <div className="my-6 flex items-center gap-3">
-            <div className="flex-1 h-px" style={{ background: "var(--border)" }} />
-            <span className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: "var(--faint)" }}>How it works</span>
-            <div className="flex-1 h-px" style={{ background: "var(--border)" }} />
+          <div className="section-divider my-6">
+            <span className="text-[10px] font-semibold uppercase tracking-[0.16em]" style={{ color: "var(--faint)" }}>How it works</span>
           </div>
 
           {/* steps */}
@@ -150,7 +139,7 @@ export default async function SignInPage({ searchParams }: SignInPageProps) {
               <div key={step.label} className="flex items-start gap-3 anim-cascade" style={{ animationDelay: `${200 + i * 100}ms` }}>
                 <div
                   className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-[8px]"
-                  style={{ background: "var(--surface)", border: "1px solid var(--border)" }}
+                  style={{ background: "var(--btn-secondary-bg)", border: "1px solid var(--btn-secondary-border)" }}
                 >
                   <step.icon size={13} style={{ color: "var(--accent-dim)" }} />
                 </div>
@@ -173,7 +162,7 @@ export default async function SignInPage({ searchParams }: SignInPageProps) {
           className="glass-inner px-5 py-3.5 text-[11px] leading-relaxed anim-cascade"
           style={{ color: "var(--muted)", animationDelay: "600ms" }}
         >
-          Clearweight uses OAuth PKCE to securely authenticate with Codex. Your credentials are never stored — only a short-lived session token is kept.
+          Scout uses OAuth PKCE to authenticate with Codex. Credentials are never stored. Only a short-lived encrypted session token is kept.
         </div>
       </div>
     </main>

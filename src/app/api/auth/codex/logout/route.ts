@@ -1,13 +1,16 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 
 import {
   clearCodexPendingCookieHeader,
+  clearCodexSessionFromCookies,
   clearCodexSessionCookieHeaders,
-} from "@/lib/codex-oauth";
+} from "@/lib/auth/codex-oauth";
 
 export const runtime = "nodejs";
 
-export async function POST() {
+export async function POST(request: NextRequest) {
+  await clearCodexSessionFromCookies(request.cookies);
+
   const response = NextResponse.json({
     signedIn: false,
     provider: "codex",

@@ -13,8 +13,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Clearweight",
-  description: "An open-source AI assisted weighted decision matrix.",
+  title: "Scout",
+  description:
+    "Autonomous pre-call research for commercial insurance brokers.",
   icons: {
     icon: "/logo.svg",
     apple: "/logo.svg",

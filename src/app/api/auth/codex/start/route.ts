@@ -16,8 +16,8 @@ import {
   randomUrlToken,
   secureCookie,
   isLoopbackUrl,
-} from "@/lib/codex-oauth";
-import { ensureCodexLoopbackServer } from "@/lib/codex-loopback-server";
+} from "@/lib/auth/codex-oauth";
+import { ensureCodexLoopbackServer } from "@/lib/auth/codex-loopback-server";
 
 export const runtime = "nodejs";
 

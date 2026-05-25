@@ -9,7 +9,7 @@ import {
   cleanupCodexAuthStores,
   completeCodexOAuthCode,
   secureCookie,
-} from "@/lib/codex-oauth";
+} from "@/lib/auth/codex-oauth";
 
 export const runtime = "nodejs";
 
@@ -45,7 +45,7 @@ export async function GET(request: NextRequest) {
     );
 
     const response = NextResponse.redirect(redirectUrl);
-    for (const cookie of codexSessionCookieHeaders(result.session)) {
+    for (const cookie of await codexSessionCookieHeaders(result.session)) {
       response.headers.append("Set-Cookie", cookie);
     }
     response.headers.append("Set-Cookie", clearCodexPendingCookieHeader());

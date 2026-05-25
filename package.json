@@ -1,7 +1,7 @@
 {
-  "name": "clearweight",
+  "name": "scout",
   "version": "0.1.0",
-  "description": "Open-source AI assisted weighted decision matrix.",
+  "description": "Open-source autonomous pre-call research agent for commercial insurance brokers.",
   "license": "MIT",
   "private": false,
   "scripts": {
@@ -9,10 +9,13 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
-    "check": "npm run lint && npm run typecheck"
+    "check": "npm run lint && npm run typecheck && npm run test"
   },
   "dependencies": {
+    "cheerio": "^1.1.2",
     "lucide-react": "^1.14.0",
     "next": "16.2.4",
     "react": "19.2.4",
@@ -20,16 +23,15 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
-    "@remotion/cli": "^4.0.454",
-    "@remotion/renderer": "^4.0.454",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.2.4",
-    "remotion": "^4.0.454",
+    "playwright": "^1.60.0",
     "tailwindcss": "^4",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vitest": "^4.1.7"
   }
 }

@@ -1,14 +1,9 @@
 import {
-  clampScore,
-  clampWeight,
-  decisionMatrixSchema,
-  sanitizeMatrix,
-  type DecisionMatrix,
-} from "@/lib/decision-matrix";
-import {
-  codexOriginator,
   type CodexSession,
-} from "@/lib/codex-oauth";
+  codexOriginator,
+} from "@/lib/auth/codex-oauth";
+import type { ResearchSynthesisPayload } from "@/lib/research/orchestrator";
+import { riskReportSchema, type RiskReport } from "@/lib/risk/report-schema";
 
 const DEFAULT_CODEX_RESPONSES_ENDPOINT =
   "https://chatgpt.com/backend-api/codex/responses";
@@ -16,8 +11,11 @@ const DEFAULT_CODEX_RESPONSES_MODEL = "gpt-5.4-mini";
 const DEFAULT_OPENAI_RESPONSES_ENDPOINT = "https://api.openai.com/v1/responses";
 const DEFAULT_OPENAI_RESPONSES_MODEL = "gpt-5.4-mini";
 
-export type MatrixGenerationResult = {
-  matrix: DecisionMatrix;
+const SYSTEM_PROMPT =
+  "You are an expert commercial insurance brokerage research agent. Your job is to produce broker-prep risk reports from source evidence. Do not invent facts. Every material risk or coverage recommendation must cite evidence IDs. Distinguish observed facts from assumptions. Use cautious insurance language: coverage considerations, not binding advice. Return JSON only matching schema.";
+
+export type ReportGenerationResult = {
+  report: RiskReport;
   model: string;
 };
 
@@ -33,7 +31,9 @@ function configuredEnv(name: string) {
 }
 
 function codexResponsesEndpoint() {
-  return configuredEnv("CODEX_RESPONSES_ENDPOINT") ?? DEFAULT_CODEX_RESPONSES_ENDPOINT;
+  return (
+    configuredEnv("CODEX_RESPONSES_ENDPOINT") ?? DEFAULT_CODEX_RESPONSES_ENDPOINT
+  );
 }
 
 function codexResponsesModel() {
@@ -41,7 +41,10 @@ function codexResponsesModel() {
 }
 
 function openAIResponsesEndpoint() {
-  return configuredEnv("OPENAI_RESPONSES_ENDPOINT") ?? DEFAULT_OPENAI_RESPONSES_ENDPOINT;
+  return (
+    configuredEnv("OPENAI_RESPONSES_ENDPOINT") ??
+    DEFAULT_OPENAI_RESPONSES_ENDPOINT
+  );
 }
 
 function openAIResponsesModel() {
@@ -52,6 +55,11 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
+}
+
+function stringField(record: Record<string, unknown>, key: string) {
+  const value = record[key];
+  return typeof value === "string" ? value : null;
 }
 
 function extractText(payload: unknown) {
@@ -78,9 +86,8 @@ function extractText(payload: unknown) {
       const text = contentRecord.text;
       if (typeof text === "string") return [text];
       const textRecord = asRecord(text);
-      if (textRecord) {
-        const value = textRecord.value;
-        return typeof value === "string" ? [value] : [];
+      if (textRecord && typeof textRecord.value === "string") {
+        return [textRecord.value];
       }
       return [];
     });
@@ -99,9 +106,7 @@ function fencedCodeBlocks(text: string) {
   for (const line of lines) {
     const trimmed = line.trim();
     if (!isInsideFence) {
-      if (trimmed.startsWith("```")) {
-        isInsideFence = true;
-      }
+      if (trimmed.startsWith("```")) isInsideFence = true;
       continue;
     }
 
@@ -115,9 +120,7 @@ function fencedCodeBlocks(text: string) {
     payloadLines.push(line);
   }
 
-  if (isInsideFence) {
-    payloads.push(payloadLines.join("\n").trim());
-  }
+  if (isInsideFence) payloads.push(payloadLines.join("\n").trim());
 
   return payloads;
 }
@@ -140,10 +143,10 @@ function jsonObjectIn(text: string) {
           isEscaped = false;
         } else if (character === "\\") {
           isEscaped = true;
-        } else if (character === "\"") {
+        } else if (character === '"') {
           isInsideString = false;
         }
-      } else if (character === "\"") {
+      } else if (character === '"') {
         isInsideString = true;
       } else if (character === "{") {
         depth += 1;
@@ -177,99 +180,6 @@ function extractJSONObject(text: string) {
   }
 
   return jsonObjectIn(trimmed) ?? trimmed;
-}
-
-function limitString(value: unknown, maxLength: number) {
-  if (typeof value !== "string") return value;
-
-  const trimmed = value.trim();
-  if (trimmed.length <= maxLength) return trimmed;
-
-  const wordBoundary = trimmed.slice(0, maxLength).replace(/\s+\S*$/u, "").trim();
-  return wordBoundary.length > 12 ? wordBoundary : trimmed.slice(0, maxLength);
-}
-
-function boundedInteger(
-  value: unknown,
-  min: number,
-  max: number,
-  fallback: number,
-) {
-  const numberValue =
-    typeof value === "number"
-      ? value
-      : typeof value === "string" && value.trim()
-        ? Number(value)
-        : Number.NaN;
-
-  if (!Number.isFinite(numberValue)) return fallback;
-
-  return Math.min(max, Math.max(min, Math.round(numberValue)));
-}
-
-function normalizeMatrixCandidate(candidate: unknown): unknown {
-  const matrix = asRecord(candidate);
-  if (!matrix) return candidate;
-
-  return {
-    ...matrix,
-    title: limitString(matrix.title, 90),
-    shortContext: limitString(matrix.shortContext, 260),
-    criteria: Array.isArray(matrix.criteria)
-      ? matrix.criteria.map((criterion) => {
-          const record = asRecord(criterion);
-          if (!record) return criterion;
-
-          return {
-            ...record,
-            id: limitString(record.id, 40),
-            name: limitString(record.name, 48),
-            description: limitString(record.description, 180),
-            weight: clampWeight(boundedInteger(record.weight, 0, 100, 25)),
-            gateMinimum: clampScore(boundedInteger(record.gateMinimum, 0, 100, 0)),
-          };
-        })
-      : matrix.criteria,
-    options: Array.isArray(matrix.options)
-      ? matrix.options.map((option) => {
-          const record = asRecord(option);
-          if (!record) return option;
-
-          return {
-            ...record,
-            id: limitString(record.id, 40),
-            name: limitString(record.name, 64),
-            description: limitString(record.description, 220),
-            notes: limitString(record.notes, 220),
-            scores: Array.isArray(record.scores)
-              ? record.scores.map((score) => {
-                  const scoreRecord = asRecord(score);
-                  if (!scoreRecord) return score;
-
-                  return {
-                    ...scoreRecord,
-                    criterionId: limitString(scoreRecord.criterionId, 40),
-                    score: clampScore(boundedInteger(scoreRecord.score, 0, 100, 0)),
-                    rationale: limitString(scoreRecord.rationale, 180),
-                  };
-                })
-              : record.scores,
-          };
-        })
-      : matrix.options,
-    assumptions: Array.isArray(matrix.assumptions)
-      ? matrix.assumptions.map((item) => limitString(item, 160))
-      : matrix.assumptions,
-    recommendation: limitString(matrix.recommendation, 320),
-    watchouts: Array.isArray(matrix.watchouts)
-      ? matrix.watchouts.map((item) => limitString(item, 160))
-      : matrix.watchouts,
-  };
-}
-
-function stringField(record: Record<string, unknown>, key: string) {
-  const value = record[key];
-  return typeof value === "string" ? value : null;
 }
 
 function textFromDelta(delta: unknown) {
@@ -371,8 +281,8 @@ async function readResponsesStream(response: Response, source: string) {
     while (boundary >= 0) {
       const rawEvent = buffer.slice(0, boundary);
       buffer = buffer.slice(boundary + 2);
-
       const parsed = parseSseEvent(rawEvent);
+
       if (parsed && parsed.data !== "[DONE]") {
         try {
           captureStreamPayload(
@@ -381,9 +291,7 @@ async function readResponsesStream(response: Response, source: string) {
             parsed.eventType,
           );
         } catch {
-          if (parsed.eventType?.includes("text")) {
-            state.deltaText += parsed.data;
-          }
+          if (parsed.eventType?.includes("text")) state.deltaText += parsed.data;
         }
       }
 
@@ -435,49 +343,210 @@ async function readResponsesText(response: Response, source: string) {
   return text;
 }
 
-function parseMatrixText(text: string) {
-  const json = extractJSONObject(text);
-  const parsed = decisionMatrixSchema.parse(
-    normalizeMatrixCandidate(JSON.parse(json)),
-  );
+function reportInstructions() {
+  return `${SYSTEM_PROMPT}
 
-  return sanitizeMatrix(parsed);
-}
+Return only valid JSON. Do not wrap it in Markdown. Preserve evidence IDs exactly. Prefer using the supplied draft report as the baseline and improve only the synthesis, wording, and prioritization where evidence supports it.
 
-function matrixInstructions(systemPrompt: string) {
-  return `${systemPrompt}
-
-Return only valid JSON. Do not wrap it in Markdown. The JSON object must match this TypeScript shape:
+Schema:
 {
-  "title": string,
-  "shortContext": string,
-  "criteria": [{"id": string, "name": string, "description": string, "weight": integer, "kind": "benefit" | "cost" | "risk" | "effort" | "evidence", "hardGate": boolean, "gateMinimum": integer}],
-  "options": [{"id": string, "name": string, "description": string, "scores": [{"criterionId": string, "score": integer, "rationale": string}], "notes": string}],
-  "assumptions": string[],
-  "recommendation": string,
-  "watchouts": string[]
+  "id": string,
+  "createdAt": string,
+  "input": string,
+  "snapshot": {
+    "name": string,
+    "website"?: string,
+    "address"?: string,
+    "phone"?: string,
+    "categories": string[],
+    "operatingSummary": string,
+    "locationsDetected": number | null,
+    "employeeEstimate": string | null
+  },
+  "riskSignals": [{
+    "id": string,
+    "label": string,
+    "category": "premises" | "auto" | "workers" | "liquor" | "cyber" | "property" | "professional" | "product" | "child_safety" | "environmental" | "catastrophe",
+    "severity": 1 | 2 | 3 | 4 | 5,
+    "confidence": "low" | "medium" | "high",
+    "whyItMatters": string,
+    "evidenceIds": string[],
+    "coverageImplications": string[]
+  }],
+  "coverageRecommendations": [{
+    "coverage": string,
+    "priority": "required" | "recommended" | "consider",
+    "reason": string,
+    "evidenceIds": string[],
+    "askOnCall": string[],
+    "missingData": string[]
+  }],
+  "brokerCallPacket": {
+    "opener": string,
+    "questions": string[],
+    "likelyObjections": [{"objection": string, "response": string}],
+    "underwriterNotes": string[],
+    "followUpDocuments": string[]
+  },
+  "evidence": [{"id": string, "sourceType": string, "title": string, "url"?: string, "snippet": string, "fetchedAt": string, "confidence": "low" | "medium" | "high"}],
+  "trace": [{"id": string, "label": string, "status": "complete" | "skipped" | "warning" | "error", "detail": string, "evidenceIds": string[]}],
+  "disclaimers": string[]
+}`;
 }
 
-Use the number of options and criteria the decision actually needs: 2-12 options and 3-10 criteria. Include all distinct user-named options unless invalid or duplicated.
-Weights are integer percentages across criteria and must sum to 100.
-Scores are independent integer performance ratings from 0 to 100 for each option against each criterion. Do not make scores across options sum to 100.
-gateMinimum is an integer score threshold from 0 to 100; use 0 when hardGate is false. Keep descriptions, notes, assumptions, watchouts, and rationales terse.
-Length limits are strict: title <=90 chars, criterion ids <=40, criterion names <=48, option ids <=40, option names <=64, score rationales <=100, assumptions/watchouts <=120.
-Every option must include exactly one score for every criterion id.`;
+function mergedReportCandidate(
+  base: RiskReport,
+  candidate: unknown,
+): RiskReport | null {
+  const record = asRecord(candidate);
+  if (!record) return null;
+  const brokerCallPacketRecord = asRecord(record.brokerCallPacket);
+  const likelyObjections = Array.isArray(brokerCallPacketRecord?.likelyObjections)
+    ? brokerCallPacketRecord.likelyObjections
+        .map((item) => {
+          const objection = asRecord(item);
+          if (!objection) return null;
+
+          return {
+            objection: stringField(objection, "objection"),
+            response: stringField(objection, "response"),
+          };
+        })
+        .filter(
+          (
+            item,
+          ): item is {
+            objection: string;
+            response: string;
+          } => Boolean(item?.objection && item.response),
+        )
+    : base.brokerCallPacket.likelyObjections;
+  const brokerQuestions = Array.isArray(brokerCallPacketRecord?.questions)
+    ? brokerCallPacketRecord.questions.filter(
+        (item): item is string =>
+          typeof item === "string" && item.trim().length > 0,
+      )
+    : base.brokerCallPacket.questions;
+  const underwriterNotes = Array.isArray(brokerCallPacketRecord?.underwriterNotes)
+    ? brokerCallPacketRecord.underwriterNotes.filter(
+        (item): item is string =>
+          typeof item === "string" && item.trim().length > 0,
+      )
+    : base.brokerCallPacket.underwriterNotes;
+  const followUpDocuments = Array.isArray(
+    brokerCallPacketRecord?.followUpDocuments,
+  )
+    ? brokerCallPacketRecord.followUpDocuments.filter(
+        (item): item is string =>
+          typeof item === "string" && item.trim().length > 0,
+      )
+    : base.brokerCallPacket.followUpDocuments;
+
+  const merged = {
+    id: base.id,
+    createdAt: base.createdAt,
+    input: base.input,
+    snapshot: {
+      ...base.snapshot,
+      ...(asRecord(record.snapshot) ?? {}),
+    },
+    riskSignals: Array.isArray(record.riskSignals)
+      ? record.riskSignals
+      : base.riskSignals,
+    coverageRecommendations: Array.isArray(record.coverageRecommendations)
+      ? record.coverageRecommendations
+      : base.coverageRecommendations,
+    brokerCallPacket: {
+      ...base.brokerCallPacket,
+      opener:
+        stringField(brokerCallPacketRecord ?? {}, "opener") ??
+        base.brokerCallPacket.opener,
+      questions:
+        brokerQuestions.length > 0
+          ? brokerQuestions
+          : base.brokerCallPacket.questions,
+      likelyObjections,
+      underwriterNotes:
+        underwriterNotes.length > 0
+          ? underwriterNotes
+          : base.brokerCallPacket.underwriterNotes,
+      followUpDocuments:
+        followUpDocuments.length > 0
+          ? followUpDocuments
+          : base.brokerCallPacket.followUpDocuments,
+    },
+    evidence: base.evidence,
+    trace: base.trace,
+    disclaimers: Array.isArray(record.disclaimers)
+      ? [...new Set([...base.disclaimers, ...record.disclaimers.filter((item): item is string => typeof item === "string" && item.trim().length > 0)])]
+      : base.disclaimers,
+  };
+
+  const parsed = riskReportSchema.safeParse(merged);
+  return parsed.success ? parsed.data : null;
 }
 
-export async function generateMatrixWithCodex(
+function parseModelReport(text: string, base: RiskReport) {
+  const json = extractJSONObject(text);
+  const parsed = mergedReportCandidate(base, JSON.parse(json));
+  if (parsed) return parsed;
+
+  return {
+    ...base,
+    disclaimers: [
+      ...base.disclaimers,
+      "AI synthesis returned an invalid structure. Showing deterministic base report.",
+    ],
+  };
+}
+
+function reportPayloadText(payload: ResearchSynthesisPayload) {
+  return JSON.stringify(
+    {
+      normalizedBusinessInput: payload.normalizedInput,
+      websiteFacts: payload.websiteFacts,
+      mapListingFacts: payload.googlePlacesFacts,
+      reviewExcerpts: {
+        googlePlaces: payload.googlePlacesFacts?.raw.reviews ?? [],
+        yelp: payload.yelpFacts?.evidence
+          .filter((item) => item.title.toLowerCase().includes("review"))
+          .map((item) => item.snippet) ?? [],
+      },
+      femaGeocodeFacts: {
+        geocode: payload.geocodeFacts,
+        flood: payload.femaFacts,
+      },
+      deterministicRiskSignals: payload.draftReport.riskSignals,
+      evidenceList: payload.draftReport.evidence,
+      draftReport: payload.draftReport,
+    },
+    null,
+    2,
+  );
+}
+
+async function synthesizeFromText(
+  text: string,
+  base: RiskReport,
+  model: string,
+) {
+  return {
+    report: parseModelReport(text, base),
+    model,
+  } satisfies ReportGenerationResult;
+}
+
+export async function synthesizeRiskReportWithCodex(
   session: CodexSession,
-  prompt: string,
-  systemPrompt: string,
-): Promise<MatrixGenerationResult> {
+  payload: ResearchSynthesisPayload,
+): Promise<ReportGenerationResult> {
   const model = codexResponsesModel();
   const headers: Record<string, string> = {
-    "Authorization": `Bearer ${session.accessToken}`,
-    "Accept": "text/event-stream",
+    Authorization: `Bearer ${session.accessToken}`,
+    Accept: "text/event-stream",
     "Content-Type": "application/json",
     "OpenAI-Beta": "responses=experimental",
-    "originator": codexOriginator(),
+    originator: codexOriginator(),
   };
 
   if (session.profile.accountId) {
@@ -491,14 +560,14 @@ export async function generateMatrixWithCodex(
       model,
       store: false,
       stream: true,
-      instructions: matrixInstructions(systemPrompt),
+      instructions: reportInstructions(),
       input: [
         {
           role: "user",
           content: [
             {
               type: "input_text",
-              text: `${prompt}\n\nReturn valid JSON only.`,
+              text: `${reportPayloadText(payload)}\n\nReturn valid JSON only.`,
             },
           ],
         },
@@ -507,49 +576,43 @@ export async function generateMatrixWithCodex(
         verbosity: "low",
       },
       reasoning: {
-        effort: "low",
+        effort: "medium",
         summary: "auto",
       },
     }),
   });
 
   if (!response.ok) {
-    const responseText = await response.text();
-    throw new Error(`Codex Responses failed with ${response.status}: ${responseText}`);
+    throw new Error(`Codex Responses failed with ${response.status}.`);
   }
 
   const text = await readResponsesStream(response, "Codex");
-
-  return {
-    matrix: parseMatrixText(text),
-    model,
-  };
+  return synthesizeFromText(text, payload.draftReport, model);
 }
 
-export async function generateMatrixWithOpenAI(
-  prompt: string,
-  systemPrompt: string,
+export async function synthesizeRiskReportWithOpenAI(
   apiKey: string,
-): Promise<MatrixGenerationResult> {
+  payload: ResearchSynthesisPayload,
+): Promise<ReportGenerationResult> {
   const model = openAIResponsesModel();
   const response = await fetch(openAIResponsesEndpoint(), {
     method: "POST",
     headers: {
-      "Authorization": `Bearer ${apiKey}`,
-      "Accept": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+      Accept: "application/json",
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
       model,
       store: false,
-      instructions: matrixInstructions(systemPrompt),
+      instructions: reportInstructions(),
       input: [
         {
           role: "user",
           content: [
             {
               type: "input_text",
-              text: `${prompt}\n\nReturn valid json only.`,
+              text: `${reportPayloadText(payload)}\n\nReturn valid JSON only.`,
             },
           ],
         },
@@ -560,20 +623,15 @@ export async function generateMatrixWithOpenAI(
         },
       },
       reasoning: {
-        effort: "low",
+        effort: "medium",
       },
     }),
   });
 
   if (!response.ok) {
-    const responseText = await response.text();
-    throw new Error(`OpenAI Responses failed with ${response.status}: ${responseText}`);
+    throw new Error(`OpenAI Responses failed with ${response.status}.`);
   }
 
   const text = await readResponsesText(response, "OpenAI");
-
-  return {
-    matrix: parseMatrixText(text),
-    model,
-  };
+  return synthesizeFromText(text, payload.draftReport, model);
 }

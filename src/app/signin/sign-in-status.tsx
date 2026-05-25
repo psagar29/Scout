@@ -73,7 +73,7 @@ export function SignInStatus() {
           {/* avatar / icon */}
           <div
             className="flex h-8 w-8 items-center justify-center rounded-full"
-            style={{ background: status?.signedIn ? "var(--accent)" : "var(--surface-hover)", color: status?.signedIn ? "var(--bg)" : "var(--faint)" }}
+            style={{ background: status?.signedIn ? "var(--accent)" : "var(--btn-secondary-bg)", color: status?.signedIn ? "var(--bg)" : "var(--faint)" }}
           >
             <User size={14} />
           </div>
@@ -96,7 +96,7 @@ export function SignInStatus() {
           onClick={refresh}
           disabled={isBusy}
           className="flex h-7 w-7 items-center justify-center rounded-[10px] transition-all duration-200 hover:scale-105 active:scale-95 disabled:opacity-50"
-          style={{ background: "var(--surface-hover)", color: "var(--muted)" }}
+          style={{ background: "var(--btn-secondary-bg)", border: "1px solid var(--border)", color: "var(--muted)" }}
           aria-label="Refresh status"
         >
           <RefreshCcw className={isBusy ? "animate-spin" : ""} size={12} />
@@ -126,7 +126,7 @@ export function SignInStatus() {
             onClick={logout}
             disabled={isBusy}
             className="mt-3 flex h-8 w-full items-center justify-center gap-2 rounded-[10px] text-[11px] font-semibold transition-all duration-200 hover:scale-[1.01] active:scale-[0.99] disabled:opacity-50"
-            style={{ background: "var(--surface)", border: "1px solid var(--border-mid)", color: "var(--muted)" }}
+            style={{ background: "var(--btn-secondary-bg)", border: "1px solid var(--btn-secondary-border)", color: "var(--muted)" }}
           >
             <LogOut size={12} />
             Sign out

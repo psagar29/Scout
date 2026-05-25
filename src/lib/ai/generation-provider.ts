@@ -1,4 +1,4 @@
-import { isLoopbackUrl } from "@/lib/codex-oauth";
+import { isLoopbackUrl } from "@/lib/auth/codex-oauth";
 
 export type GenerationProvider = "codex" | "openai";
 export type GenerationMode = GenerationProvider | "auto";
@@ -32,8 +32,8 @@ export function requestAppOrigin(request: RequestLike) {
   return host ? `${proto}://${host}` : requestUrl.origin;
 }
 
-export function matrixGenerationMode(): GenerationMode {
-  const mode = configuredEnv("CLEARWEIGHT_AI_PROVIDER")?.toLowerCase();
+export function researchGenerationMode(): GenerationMode {
+  const mode = configuredEnv("BROKER_SCOUT_AI_PROVIDER")?.toLowerCase();
 
   if (mode === "codex" || mode === "openai" || mode === "auto") {
     return mode;
@@ -42,19 +42,21 @@ export function matrixGenerationMode(): GenerationMode {
   return "auto";
 }
 
-export function matrixGenerationProviderFor(appOrigin: string): GenerationProvider {
-  const mode = matrixGenerationMode();
+export function researchGenerationProviderFor(
+  appOrigin: string,
+): GenerationProvider {
+  const mode = researchGenerationMode();
   if (mode === "codex" || mode === "openai") return mode;
 
   return isLoopbackUrl(appOrigin) ? "codex" : "openai";
 }
 
-export function matrixGenerationStatusFor(
+export function researchGenerationStatusFor(
   appOrigin: string,
   codexSignInAvailable: boolean,
 ): GenerationStatus {
-  const mode = matrixGenerationMode();
-  const provider = matrixGenerationProviderFor(appOrigin);
+  const mode = researchGenerationMode();
+  const provider = researchGenerationProviderFor(appOrigin);
 
   if (provider === "openai") {
     return {

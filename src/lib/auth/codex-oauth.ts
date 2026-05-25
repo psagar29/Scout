@@ -5,9 +5,15 @@ import {
   randomBytes,
 } from "node:crypto";
 
-export const CODEX_SESSION_COOKIE = "clearweight_codex_session";
-export const CODEX_STATE_COOKIE = "clearweight_codex_state";
-export const CODEX_PENDING_COOKIE = "clearweight_codex_pending";
+import {
+  deleteStoredCodexSession,
+  loadStoredCodexSession,
+  persistStoredCodexSession,
+} from "@/lib/auth/codex-session-store";
+
+export const CODEX_SESSION_COOKIE = "broker_scout_codex_session";
+export const CODEX_STATE_COOKIE = "broker_scout_codex_state";
+export const CODEX_PENDING_COOKIE = "broker_scout_codex_pending";
 
 export const DEFAULT_CODEX_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
 export const DEFAULT_CODEX_REDIRECT_URI =
@@ -19,7 +25,6 @@ const PENDING_TTL_MS = 10 * 60 * 1000;
 const SESSION_TTL_MS = 8 * 60 * 60 * 1000;
 const SESSION_REFRESH_GRACE_MS = 24 * 60 * 60 * 1000;
 const REFRESH_WINDOW_MS = 2 * 60 * 1000;
-const SESSION_COOKIE_CHUNK_SIZE = 3600;
 const MAX_SESSION_COOKIE_CHUNKS = 8;
 
 export type CodexProfile = {
@@ -48,6 +53,7 @@ export type CodexSession = {
   accessToken: string;
   refreshToken: string | null;
   idToken: string | null;
+  sessionId?: string;
 };
 
 export type CodexTokenResponse = {
@@ -60,13 +66,22 @@ export type CodexTokenResponse = {
 };
 
 declare global {
-  var clearweightCodexPending: Map<string, PendingCodexOAuth> | undefined;
+  var brokerScoutCodexPending:
+    | Map<string, PendingCodexOAuth>
+    | undefined;
+  var brokerScoutCodexSessions:
+    | Map<string, CodexSession>
+    | undefined;
 }
 
 export const pendingCodexOAuth =
-  globalThis.clearweightCodexPending ?? new Map<string, PendingCodexOAuth>();
+  globalThis.brokerScoutCodexPending ?? new Map<string, PendingCodexOAuth>();
 
-globalThis.clearweightCodexPending = pendingCodexOAuth;
+export const codexSessions =
+  globalThis.brokerScoutCodexSessions ?? new Map<string, CodexSession>();
+
+globalThis.brokerScoutCodexPending = pendingCodexOAuth;
+globalThis.brokerScoutCodexSessions = codexSessions;
 
 type CookieReader = {
   get(name: string): { value: string } | undefined;
@@ -75,6 +90,10 @@ type CookieReader = {
 type SealedPendingCodexOAuth = {
   state: string;
   pending: PendingCodexOAuth;
+};
+
+type SealedCodexSessionPointer = {
+  sessionId: string;
 };
 
 function configuredEnv(name: string) {
@@ -157,7 +176,7 @@ export function codexOAuthProblemMessage(
     case "hosted_default_client_unsupported":
       return "This deployment is using the public Codex desktop OAuth client with a hosted callback. OpenAI rejects that redirect. Configure a Codex OAuth client that is allowed to redirect to this domain.";
     case "hosted_loopback_unsupported":
-      return "This deployment is configured for the local Codex loopback callback. That only works when Clearweight is running on the same machine as the browser.";
+      return "This deployment is configured for the local Codex loopback callback. That only works when Broker Scout is running on the same machine as the browser.";
     default:
       return null;
   }
@@ -177,14 +196,14 @@ export function secureCookie() {
 
 function cookieSecret() {
   const secret =
-    configuredEnv("CLEARWEIGHT_COOKIE_SECRET") ??
+    configuredEnv("BROKER_SCOUT_COOKIE_SECRET") ??
     configuredEnv("AUTH_SECRET") ??
     (process.env.NODE_ENV === "production"
       ? undefined
-      : "clearweight-dev-cookie-secret");
+      : "broker-scout-dev-cookie-secret");
 
   if (!secret) {
-    throw new Error("CLEARWEIGHT_COOKIE_SECRET is required in production.");
+    throw new Error("BROKER_SCOUT_COOKIE_SECRET is required in production.");
   }
 
   return secret;
@@ -213,7 +232,9 @@ function sealJson(value: unknown) {
 
 function unsealJson<T>(sealed: string): T | null {
   const [version, ivValue, tagValue, ciphertextValue] = sealed.split(".");
-  if (version !== "v1" || !ivValue || !tagValue || !ciphertextValue) return null;
+  if (version !== "v1" || !ivValue || !tagValue || !ciphertextValue) {
+    return null;
+  }
 
   try {
     const decipher = createDecipheriv(
@@ -252,33 +273,6 @@ function clearChunkedCookieHeaders(name: string) {
   ];
 }
 
-function chunkedCookieHeaders(name: string, value: string, maxAge: number) {
-  if (value.length <= SESSION_COOKIE_CHUNK_SIZE) {
-    return [
-      serializeCookie(name, value, maxAge),
-      ...Array.from({ length: MAX_SESSION_COOKIE_CHUNKS }, (_, index) =>
-        clearCookieHeader(`${name}.${index}`),
-      ),
-    ];
-  }
-
-  const chunks = value.match(new RegExp(`.{1,${SESSION_COOKIE_CHUNK_SIZE}}`, "g")) ?? [];
-  if (chunks.length > MAX_SESSION_COOKIE_CHUNKS) {
-    throw new Error("Codex session is too large to store in cookies.");
-  }
-
-  return [
-    clearCookieHeader(name),
-    ...chunks.map((chunk, index) =>
-      serializeCookie(`${name}.${index}`, chunk, maxAge),
-    ),
-    ...Array.from(
-      { length: MAX_SESSION_COOKIE_CHUNKS - chunks.length },
-      (_, index) => clearCookieHeader(`${name}.${chunks.length + index}`),
-    ),
-  ];
-}
-
 function readChunkedCookie(cookies: CookieReader, name: string) {
   const direct = cookies.get(name)?.value;
   if (direct) return direct;
@@ -299,6 +293,12 @@ export function cleanupCodexAuthStores(now = Date.now()) {
   for (const [state, pending] of pendingCodexOAuth) {
     if (now - pending.createdAt > PENDING_TTL_MS) {
       pendingCodexOAuth.delete(state);
+    }
+  }
+
+  for (const [sessionId, session] of codexSessions) {
+    if (sessionIsStale(session, now)) {
+      codexSessions.delete(sessionId);
     }
   }
 }
@@ -439,6 +439,31 @@ export function buildSession(tokens: CodexTokenResponse): CodexSession {
   };
 }
 
+function pointerSessionFromCookie(cookies: CookieReader) {
+  const sealedPointer = cookies.get(CODEX_SESSION_COOKIE)?.value;
+  if (!sealedPointer) return null;
+
+  const parsed = unsealJson<SealedCodexSessionPointer>(sealedPointer);
+  if (!parsed || typeof parsed.sessionId !== "string" || !parsed.sessionId) {
+    return null;
+  }
+
+  return parsed;
+}
+
+async function rememberCodexSession(session: CodexSession) {
+  const sessionId = session.sessionId ?? randomUrlToken(24);
+  const storedSession = { ...session, sessionId };
+  codexSessions.set(sessionId, storedSession);
+  await persistStoredCodexSession(
+    sessionId,
+    sealJson(storedSession),
+    storedSession.expiresAt +
+      (storedSession.refreshToken ? SESSION_REFRESH_GRACE_MS : 0),
+  );
+  return storedSession;
+}
+
 export async function exchangeCodeForCodexTokens(
   code: string,
   pending: PendingCodexOAuth,
@@ -541,7 +566,10 @@ export async function refreshCodexSession(current: CodexSession) {
     throw new Error("Codex refresh response did not include an access token.");
   }
 
-  return buildSession(mergeRefreshTokens(current, tokens));
+  return {
+    ...buildSession(mergeRefreshTokens(current, tokens)),
+    sessionId: current.sessionId,
+  };
 }
 
 function validCodexSession(value: unknown): CodexSession | null {
@@ -562,32 +590,82 @@ function validCodexSession(value: unknown): CodexSession | null {
 
 export async function resolveCodexSession(cookies: CookieReader) {
   cleanupCodexAuthStores();
-  const sealedSession = readChunkedCookie(cookies, CODEX_SESSION_COOKIE);
-  if (!sealedSession) return null;
+  const pointer = pointerSessionFromCookie(cookies);
+  let current =
+    pointer && codexSessions.has(pointer.sessionId)
+      ? codexSessions.get(pointer.sessionId) ?? null
+      : null;
 
-  const current = validCodexSession(unsealJson<CodexSession>(sealedSession));
+  if (!current && pointer) {
+    const stored = await loadStoredCodexSession(pointer.sessionId);
+    const loaded = stored
+      ? validCodexSession(unsealJson<CodexSession>(stored.sealedSession))
+      : null;
+    if (loaded) {
+      current = { ...loaded, sessionId: pointer.sessionId };
+      codexSessions.set(pointer.sessionId, current);
+    }
+  }
+
+  if (!current) {
+    const sealedSession = readChunkedCookie(cookies, CODEX_SESSION_COOKIE);
+    if (!sealedSession) return null;
+    current = validCodexSession(unsealJson<CodexSession>(sealedSession));
+  }
+
   if (!current) return null;
-  if (sessionIsStale(current)) return null;
+  if (sessionIsStale(current)) {
+    if (pointer) {
+      codexSessions.delete(pointer.sessionId);
+      await deleteStoredCodexSession(pointer.sessionId);
+    }
+    return null;
+  }
 
   if (current.expiresAt - Date.now() > REFRESH_WINDOW_MS) {
-    return current;
+    return pointer ? { ...current, sessionId: pointer.sessionId } : current;
   }
 
   try {
-    return await refreshCodexSession(current);
+    const refreshed = await refreshCodexSession(
+      pointer ? { ...current, sessionId: pointer.sessionId } : current,
+    );
+    return pointer ? await rememberCodexSession(refreshed) : refreshed;
   } catch {
+    if (pointer) {
+      codexSessions.delete(pointer.sessionId);
+      await deleteStoredCodexSession(pointer.sessionId);
+    }
     return null;
   }
 }
 
-export function codexSessionCookieHeaders(session: CodexSession) {
+export async function codexSessionCookieHeaders(session: CodexSession) {
   const expiresAt =
     session.expiresAt + (session.refreshToken ? SESSION_REFRESH_GRACE_MS : 0);
   const maxAge = Math.max(60, Math.floor((expiresAt - Date.now()) / 1000));
+  const storedSession = await rememberCodexSession(session);
 
-  return chunkedCookieHeaders(CODEX_SESSION_COOKIE, sealJson(session), maxAge);
+  return [
+    serializeCookie(
+      CODEX_SESSION_COOKIE,
+      sealJson({ sessionId: storedSession.sessionId }),
+      maxAge,
+    ),
+    ...Array.from({ length: MAX_SESSION_COOKIE_CHUNKS }, (_, index) =>
+      clearCookieHeader(`${CODEX_SESSION_COOKIE}.${index}`),
+    ),
+  ];
 }
 
 export function clearCodexSessionCookieHeaders() {
   return clearChunkedCookieHeaders(CODEX_SESSION_COOKIE);
+}
+
+export async function clearCodexSessionFromCookies(cookies: CookieReader) {
+  const pointer = pointerSessionFromCookie(cookies);
+  if (pointer) {
+    codexSessions.delete(pointer.sessionId);
+    await deleteStoredCodexSession(pointer.sessionId);
+  }
 }

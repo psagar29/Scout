@@ -6,10 +6,11 @@ import {
   clearCodexPendingCookieHeader,
   codexSessionCookieHeaders,
   completeCodexOAuthCode,
-} from "@/lib/codex-oauth";
+} from "@/lib/auth/codex-oauth";
 
 declare global {
-  var clearweightCodexLoopbackServer: Server | undefined;
+  var brokerScoutCodexLoopbackServer: Server | undefined;
+  var brokerScoutCodexLoopbackServerPromise: Promise<void> | undefined;
 }
 
 function escapeHtml(value: string) {
@@ -22,7 +23,7 @@ function escapeHtml(value: string) {
 
 function callbackHtml(success: boolean, message: string, redirectUrl?: string) {
   const title = success ? "Authentication successful" : "Authentication failed";
-  const accent = success ? "#2e5c45" : "#a53c29";
+  const accent = success ? "#0f8a63" : "#a53c29";
   const safeRedirect = redirectUrl ? escapeHtml(redirectUrl) : null;
 
   return `<!doctype html>
@@ -33,20 +34,20 @@ function callbackHtml(success: boolean, message: string, redirectUrl?: string) {
   ${safeRedirect ? `<meta http-equiv="refresh" content="1;url=${safeRedirect}" />` : ""}
   <title>${title}</title>
   <style>
-    body { margin: 0; background: #f4f1ea; color: #25231f; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-    main { max-width: 560px; margin: 80px auto; padding: 28px; border: 1px solid #ddd6c9; border-radius: 8px; background: #fffdf8; box-shadow: 0 10px 30px rgba(37,35,31,0.08); }
+    body { margin: 0; background: #090909; color: #f2f2f2; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    main { max-width: 560px; margin: 80px auto; padding: 28px; border: 1px solid rgba(255,255,255,0.08); border-radius: 20px; background: rgba(18,18,18,0.94); box-shadow: 0 24px 60px rgba(0,0,0,0.45); }
     .eyebrow { margin-bottom: 12px; color: ${accent}; font-size: 12px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; }
     h1 { margin: 0 0 10px; font-size: 24px; }
-    p { margin: 0; color: #5d574d; line-height: 1.6; }
-    a { color: #2e5c45; font-weight: 700; }
+    p { margin: 0; color: #b3b3b3; line-height: 1.6; }
+    a { color: #e5e5e5; font-weight: 700; }
   </style>
 </head>
 <body>
   <main>
-    <div class="eyebrow">Clearweight</div>
+    <div class="eyebrow">Broker Scout</div>
     <h1>${title}</h1>
     <p>${escapeHtml(message)}</p>
-    ${safeRedirect ? `<p style="margin-top: 14px;"><a href="${safeRedirect}">Return to Clearweight</a></p>` : ""}
+    ${safeRedirect ? `<p style="margin-top: 14px;"><a href="${safeRedirect}">Return to Broker Scout</a></p>` : ""}
   </main>
 </body>
 </html>`;
@@ -75,9 +76,35 @@ function cookieFromHeader(header: string | undefined, name: string) {
   return match ? decodeURIComponent(match.slice(prefix.length)) : null;
 }
 
+async function existingLoopbackServerLooksHealthy() {
+  for (const url of [
+    "http://localhost:1455/auth/callback",
+    "http://127.0.0.1:1455/auth/callback",
+    "http://[::1]:1455/auth/callback",
+  ]) {
+    try {
+      const response = await fetch(url, {
+        signal: AbortSignal.timeout(1500),
+      });
+      const body = await response.text();
+      if (body.includes("Broker Scout") && body.includes("/auth/callback")) {
+        return true;
+      }
+    } catch {
+      // Try the next loopback address.
+    }
+  }
+
+  return false;
+}
+
 export async function ensureCodexLoopbackServer() {
-  if (globalThis.clearweightCodexLoopbackServer?.listening) {
+  if (globalThis.brokerScoutCodexLoopbackServer?.listening) {
     return;
+  }
+
+  if (globalThis.brokerScoutCodexLoopbackServerPromise) {
+    return globalThis.brokerScoutCodexLoopbackServerPromise;
   }
 
   const server = createServer(async (request, response) => {
@@ -88,7 +115,10 @@ export async function ensureCodexLoopbackServer() {
       sendHtml(
         response,
         404,
-        callbackHtml(false, "This local Codex callback endpoint only handles /auth/callback."),
+        callbackHtml(
+          false,
+          "This local Codex callback endpoint only handles /auth/callback.",
+        ),
       );
       return;
     }
@@ -130,11 +160,11 @@ export async function ensureCodexLoopbackServer() {
         200,
         callbackHtml(
           true,
-          "Authentication completed. Returning to Clearweight.",
+          "Authentication completed. Returning to Broker Scout.",
           redirectUrl.toString(),
         ),
         [
-          ...codexSessionCookieHeaders(result.session),
+          ...(await codexSessionCookieHeaders(result.session)),
           clearCodexPendingCookieHeader(),
         ],
       );
@@ -150,12 +180,37 @@ export async function ensureCodexLoopbackServer() {
     }
   });
 
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(1455, "localhost", () => {
-      server.off("error", reject);
-      globalThis.clearweightCodexLoopbackServer = server;
-      resolve();
+  globalThis.brokerScoutCodexLoopbackServerPromise = new Promise<void>(
+    (resolve, reject) => {
+      server.once("error", reject);
+      server.listen(1455, () => {
+        server.off("error", reject);
+        globalThis.brokerScoutCodexLoopbackServer = server;
+        resolve();
+      });
+    },
+  )
+    .catch(async (error: unknown) => {
+      const code =
+        typeof error === "object" &&
+        error !== null &&
+        "code" in error &&
+        typeof error.code === "string"
+          ? error.code
+          : null;
+
+      if (
+        code === "EADDRINUSE" &&
+        (await existingLoopbackServerLooksHealthy())
+      ) {
+        return;
+      }
+
+      throw error;
+    })
+    .finally(() => {
+      globalThis.brokerScoutCodexLoopbackServerPromise = undefined;
     });
-  });
+
+  return globalThis.brokerScoutCodexLoopbackServerPromise;
 }
